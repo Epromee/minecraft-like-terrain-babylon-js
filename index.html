@@ -32,6 +32,8 @@
 
     <script>
 
+        /*================================================= UTIL CODE ==============================================*/
+
         /* Appends source contents to the end of target contents (in place!) */
         function flush_array(target, source) {
             for (let i = 0; i < source.length; ++i) {
@@ -68,7 +70,9 @@
             return 0;
         }
 
-        /* Represents an operator class for making custom terrain from squares */
+        /*================================================= GAME CODE ==============================================*/
+
+        /* Represents a class for making custom terrain from squares */
         class SquareGridBuilder {
             
             constructor() {
@@ -88,10 +92,15 @@
                 flush_array(this.uvs, new_uvs);
                 flush_array(this.normals, new_normals);
             }
-
-            /* TODO: insert another builder's data */
-            insertSquareGridBuilder() {
-                // not implemented
+            
+            insertSquareGridBuilder(otherSgb) {
+                
+                let all_indices = this.positions.length / 3;
+                
+                flush_array(this.positions, otherSgb.positions);
+                flush_array(this.indices, cyclic_add_array([...otherSgb.indices], [all_indices]));
+                flush_array(this.uvs, otherSgb.uvs);
+                flush_array(this.normals, otherSgb.normals);
             }
 
             insertSide(xyz, vertex_loop, index_loop, normal_sample) {
@@ -228,14 +237,84 @@
                 this.cy = cy;
                 this.cz = cz;
                 this.chunkData = new Array3D(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
+
+                this.reset();
             }
 
-            /* Obtain chuck data somehow (TODO:) not somehow */
-            generate() {
-                this.chunkData.iterate(
+            reset() {
+                this.localSgb = null;
+            }
+
+            /*
+                TODO: proper UVs
+            */
+            drawToSGB(sgb, leftNgh, rightNgh, topNgh, bottomNgh, frontNgh, backNgh) {
+                
+                if (this.localSgb !== null) {
+                    sgb.insertSquareGridBuilder(this.localSgb);
+                }
+
+                this.localSgb = new SquareGridBuilder();
+
+                let localSgb = this.localSgb;
+
+                let offsetX = CHUNK_SIZE * this.cx;
+                let offsetY = CHUNK_SIZE * this.cy;
+                let offsetZ = CHUNK_SIZE * this.cz;
+
+                let chunkData = this.chunkData;                
+                chunkData.iterate(
+                    (i, j, k, value) => {
+
+                        let airBlockCode = 0;
+
+                        if (value !== airBlockCode) {
+                            
+                            if (chunkData.getValueEx(i - 1, j, k, TerrainChunk.testForValueAt(leftNgh, CHUNK_SIZE - 1, j, k, airBlockCode)) === airBlockCode)
+                                localSgb.insertLeft(i + offsetX, j + offsetY, k + offsetZ);
+                            
+                            if (chunkData.getValueEx(i + 1, j, k, TerrainChunk.testForValueAt(rightNgh, 0, j, k, airBlockCode)) === airBlockCode)
+                                localSgb.insertRight(i + offsetX, j + offsetY, k + offsetZ);
+                            
+                            if (chunkData.getValueEx(i, j + 1, k, TerrainChunk.testForValueAt(topNgh, i, 0, k, airBlockCode)) === airBlockCode)
+                                localSgb.insertTop(i + offsetX, j + offsetY, k + offsetZ);
+                            
+                            if (chunkData.getValueEx(i, j - 1, k, TerrainChunk.testForValueAt(bottomNgh, i, CHUNK_SIZE - 1, k, airBlockCode)) === airBlockCode)
+                                localSgb.insertBottom(i + offsetX, j + offsetY, k + offsetZ);
+                            
+                            if (chunkData.getValueEx(i, j, k + 1, TerrainChunk.testForValueAt(frontNgh, i, j, 0, airBlockCode)) === airBlockCode)
+                                localSgb.insertFront(i + offsetX, j + offsetY, k + offsetZ);
+                            
+                            if (chunkData.getValueEx(i, j, k - 1, TerrainChunk.testForValueAt(backNgh, i, j, CHUNK_SIZE - 1, airBlockCode)) === airBlockCode)
+                                localSgb.insertBack(i + offsetX, j + offsetY, k + offsetZ);
+                            
+                        }
+                    }
+                );
+                
+                sgb.insertSquareGridBuilder(this.localSgb);
+            }
+        }
+
+        TerrainChunk.testForValueAt = function (tc, x, y, z, otherwise) {
+            if (tc === null || tc === undefined)
+                return otherwise;            
+            return tc.chunkData.getValueEx(x, y, z, otherwise);
+        }
+
+        /* Class responsible for loading chunks from particular coords */
+        class TerrainChunkProvider {
+            
+            constructor() {}
+
+            obtainChunkFrom(cx, cy, cz) {
+
+                let chunk = new TerrainChunk(cx, cy, cz);
+
+                chunk.chunkData.iterate(
                     (x, y, z, value) => {
 
-                        return 1;
+                        if ((cx ^ cy ^ cz) % 8 !== 0) return 0;
                         
                         if (x === 0 && y === 0) return 1;
                         if (y === 0 && z === 0) return 1;
@@ -254,60 +333,14 @@
                         if (x === 0 && z === 15) return 1;
 
                         if (x >= 4 && x < 12 && y >= 4 && y < 12 && z >= 4 && z < 12)
-                            return BeyondMath.indicatorRandom(0.2);
+                            return BeyondMath.indicatorRandom(1);
 
                         return 0;
                     }
                 );
-            }
-
-            /*
-                Render to SGB (NB: x' = x + cx * 16; etc.)
-                TODO: considering neighbour chunks - so that they are connected as one
-                TODO: proper UVs
-            */
-            drawToSGB(sgb, leftNgh, rightNgh, topNgh, bottomNgh, frontNgh, backNgh) {
                 
-                let offsetX = CHUNK_SIZE * this.cx;
-                let offsetY = CHUNK_SIZE * this.cy;
-                let offsetZ = CHUNK_SIZE * this.cz;
-
-                let chunkData = this.chunkData;                
-                chunkData.iterate(
-                    (i, j, k, value) => {
-
-                        let airBlockCode = 0;
-
-                        if (value !== airBlockCode) {
-                            
-                            if (chunkData.getValueEx(i - 1, j, k, TerrainChunk.testForValueAt(leftNgh, CHUNK_SIZE - 1, j, k, airBlockCode)) === airBlockCode)
-                                sgb.insertLeft(i + offsetX, j + offsetY, k + offsetZ);
-                            
-                            if (chunkData.getValueEx(i + 1, j, k, TerrainChunk.testForValueAt(rightNgh, 0, j, k, airBlockCode)) === airBlockCode)
-                                sgb.insertRight(i + offsetX, j + offsetY, k + offsetZ);
-                            
-                            if (chunkData.getValueEx(i, j + 1, k, airBlockCode) === airBlockCode)
-                                sgb.insertTop(i + offsetX, j + offsetY, k + offsetZ);
-                            
-                            if (chunkData.getValueEx(i, j - 1, k, TerrainChunk.testForValueAt(bottomNgh, i, 0, k, airBlockCode)) === airBlockCode)
-                                sgb.insertBottom(i + offsetX, j + offsetY, k + offsetZ);
-                            
-                            if (chunkData.getValueEx(i, j, k + 1, airBlockCode) === airBlockCode)
-                                sgb.insertFront(i + offsetX, j + offsetY, k + offsetZ);
-                            
-                            if (chunkData.getValueEx(i, j, k - 1, TerrainChunk.testForValueAt(backNgh, i, j, 0, airBlockCode)) === airBlockCode)
-                                sgb.insertBack(i + offsetX, j + offsetY, k + offsetZ);
-                            
-                        }
-                    }
-                );
+                return chunk;
             }
-        }
-
-        TerrainChunk.testForValueAt = function (tc, x, y, z, otherwise) {
-            if (tc === null || tc === undefined)
-                return otherwise;            
-            return tc.chunkData.getValueEx(x, y, z, otherwise);
         }
 
 
@@ -327,45 +360,42 @@
                 let cm = this.chunkMap;
                 return cm[[x, y, z]];
             }
-
+            
             uploadChunk(chunk) {
                 let cm = this.chunkMap;
+                chunk.reset();
                 cm[[chunk.cx, chunk.cy, chunk.cz]] = chunk;
+
+                /* Now why do we reset the neighbour chunks? Because the connectivity data might have changed */
+                this.getChunk(chunk.cx - 1, chunk.cy, chunk.cz)?.reset();
+                this.getChunk(chunk.cx + 1, chunk.cy, chunk.cz)?.reset();
+                this.getChunk(chunk.cx, chunk.cy - 1, chunk.cz)?.reset();
+                this.getChunk(chunk.cx, chunk.cy + 1, chunk.cz)?.reset();
+                this.getChunk(chunk.cx, chunk.cy, chunk.cz - 1)?.reset();
+                this.getChunk(chunk.cx, chunk.cy, chunk.cz + 1)?.reset();
             }
 
-            generate() {
-                let tc = new TerrainChunk(0, 0, 0);
-                tc.generate();
-                this.uploadChunk(tc);
-
-                tc = new TerrainChunk(0, 1, 0);
-                tc.generate();
-                this.uploadChunk(tc);
-
-                tc = new TerrainChunk(1, 0, 0);
-                tc.generate();
-                this.uploadChunk(tc);
-
-                tc = new TerrainChunk(0, 0, 1);
-                tc.generate();
-                this.uploadChunk(tc);
-
-                tc = new TerrainChunk(2, 2, 2);
-                tc.generate();
-                this.uploadChunk(tc);
-
-                console.log(this.chunkMap);
+            /* TODO: with the TerrainGridManipulator class, this method gets redundant */
+            generate(chunkProvider) {
+    
+                for (let i = -4; i < 4; ++i) {
+                    for (let j = -4; j < 4; ++j) {
+                        for (let k = -4; k < 4; ++k) {
+                            let tc = chunkProvider.obtainChunkFrom(i, j, k);
+                            this.uploadChunk(tc);
+                        }
+                    }
+                }
             }
-
-            /* TODO: pass neighbours as well */
+            
             drawToSGB(sgb) {
+                
                 for (const [key, value] of Object.entries(this.chunkMap)) {
                     
                     let x = value.cx;
                     let y = value.cy;
                     let z = value.cz;
-                                
-                    // pass each chunk it's neighbours so they are aware of what to render        
+                    
                     value.drawToSGB(
                         sgb
                         , this.getChunk(x - 1, y, z)
@@ -375,10 +405,18 @@
                         , this.getChunk(x, y, z + 1)
                         , this.getChunk(x, y, z - 1)                        
                     );
-                }   // end for loop
-            } // end function drawToSGB
+                }
+            }
 
         }
+
+        /* TODO: I need a class that would manually construct TerrainGrid of chunks and update new chunks in it as the new data approaches */
+        class TerrainGridManipulator {
+            
+        };
+
+
+        /* ========================= ENGINE-DEPENDENT CODE =============================================================== */
 
         
         const canvas = document.getElementById("renderCanvas"); // Get the canvas element
@@ -420,30 +458,11 @@
             myCustomMesh = customMesh;
             
             let test_sgb = new SquareGridBuilder();
-            
-            /* This particular part is for making chunks themselves
-            let tc = new TerrainChunk(0, 0, 0);
-            tc.generate();
-            tc.drawToSGB(test_sgb);
-
-            tc = new TerrainChunk(0, 1, 0);
-            tc.generate();
-            tc.drawToSGB(test_sgb);
-
-            tc = new TerrainChunk(1, 0, 0);
-            tc.generate();
-            tc.drawToSGB(test_sgb);
-
-            tc = new TerrainChunk(0, 0, 1);
-            tc.generate();
-            tc.drawToSGB(test_sgb);
-
-            tc = new TerrainChunk(2, 2, 2);
-            tc.generate();
-            tc.drawToSGB(test_sgb);*/
 
             let terrain = new TerrainGrid();
-            terrain.generate();
+            let chunkProvider = new TerrainChunkProvider();
+
+            terrain.generate(chunkProvider);
             terrain.drawToSGB(test_sgb);
 
             var vertexData = new BABYLON.VertexData();
