@@ -52,6 +52,41 @@
             return target;
         }
 
+        /* Utils for 2D UV manipulation */
+        class Math2dForUV {};
+
+        Math2dForUV.TOP_LEFT = "tl";
+        Math2dForUV.TOP_RIGHT = "tr";
+        Math2dForUV.BOTTOM_LEFT = "bl";
+        Math2dForUV.BOTTOM_RIGHT = "br";
+
+        /* normalize_coords is: TOP_LEFT, TOP_RIGHT, BOTTOM_RIGHT, BOTTOM_LEFT */
+        Math2dForUV.selectUV = function(selectors, normalizedCoords) {
+
+            let results = [];
+
+            for (let sel of selectors) {
+                if (sel === Math2dForUV.TOP_LEFT) {
+                    results.push(normalizedCoords[0]);
+                    results.push(normalizedCoords[1]);
+                }
+                if (sel === Math2dForUV.TOP_RIGHT) {
+                    results.push(normalizedCoords[2]);
+                    results.push(normalizedCoords[3]);
+                }
+                if (sel === Math2dForUV.BOTTOM_RIGHT) {
+                    results.push(normalizedCoords[4]);
+                    results.push(normalizedCoords[5]);
+                }
+                if (sel === Math2dForUV.BOTTOM_LEFT) {
+                    results.push(normalizedCoords[6]);
+                    results.push(normalizedCoords[7]);
+                }
+            }
+                        
+            return results;
+        }
+
         /* Adds added array to a source, iterating over added array as a loop (in place!) */
         function cyclic_add_array(source, added) {
             for (let i = 0; i < source.length; ++i) {
@@ -70,7 +105,38 @@
             return 0;
         }
 
-        /*================================================= GAME CODE ==============================================*/
+        /*================================================= ENGINE-FREE CLASSES ==============================================*/
+
+        
+        class BlockUvMap {
+            
+            /* l r u d f b */
+            project(idBlock, side) {
+
+                if (idBlock === 3) {
+                    
+                    if (side === 'u') {
+                        return [0.5, 0, 1, 0, 1, 0.5, 0.5, 0.5];    // grass
+                    }
+
+                    if (side === 'd') {
+                        return [0.5, 0.5, 1, 0.5, 1, 1, 0.5, 1];    // dirt
+                    }
+
+                    return [0, 0.5, 0.5, 0.5, 0.5, 1, 0, 1];    // dirt grass
+                }
+
+                if (idBlock === 2) {
+                    return [0.5, 0.5, 1, 0.5, 1, 1, 0.5, 1];  // dirt
+                }
+
+                if (idBlock === 1) {
+                    return [0, 0, 0.5, 0, 0.5, 0.5, 0, 0.5]; // stone
+                }
+
+                return [0, 0, 1, 0, 1, 1, 0, 1];    // default - all atlas
+            }
+        }
 
         /* Represents a class for making custom terrain from squares */
         class SquareGridBuilder {
@@ -80,8 +146,9 @@
                 this.indices = [];
                 this.uvs = [];
                 this.normals = [];
+                this.uvMap = new BlockUvMap();
                 
-                this.selected_uv = [0, 0, 0, 1, 1, 0, 1, 1];
+                
                 this.straightIndices = [0, 2, 1, 1, 2, 3];
                 this.reverseIndices = [1, 2, 0, 3, 2, 1]; // just like straight, but the alternative side
             }
@@ -103,75 +170,82 @@
                 flush_array(this.normals, otherSgb.normals);
             }
 
-            insertSide(xyz, vertex_loop, index_loop, normal_sample) {
+            insertSide(xyz, vertex_loop, index_loop, normal_sample, uvs) {
                 
                 let all_indices = this.positions.length / 3;
                 
                 this.insertPiece(
                     cyclic_add_array(vertex_loop, xyz)
                     , cyclic_add_array(index_loop, [all_indices])                    
-                    , this.selected_uv
+                    , uvs
                     , replicate_array(normal_sample, 4)
                 );
             }
 
-            insertLeft(x, y, z) {
+            insertLeft(x, y, z, idBlock) {
                 
                 this.insertSide(
                     [x, y, z]
                     , [0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1]
                     , [...this.straightIndices]
                     , [-1, 0, 0]
+                    , Math2dForUV.selectUV(["tr", "tl", "br", "bl"], this.uvMap.project(idBlock, "l"))
                 );
             }
 
-            insertRight(x, y, z) {
+            insertRight(x, y, z, idBlock) {
                 
                 this.insertSide(
                     [x + 1, y, z]
                     , [0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1]
                     , [...this.reverseIndices]
                     , [1, 0, 0]
+                    , Math2dForUV.selectUV(["tl", "tr", "bl", "br"], this.uvMap.project(idBlock, "r"))
                 );
             }
 
-            insertBack(x, y, z) {
+            insertBack(x, y, z, idBlock) {
                 
                 this.insertSide(
                     [x, y, z]
                     , [0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0]
                     , [...this.straightIndices]
                     , [0, 0, -1]
+                    , Math2dForUV.selectUV(["tl", "bl", "tr", "br"], this.uvMap.project(idBlock, "b"))
                 );
             }
 
-            insertFront(x, y, z) {
+            insertFront(x, y, z, idBlock) {
                 
                 this.insertSide(
                     [x, y, z + 1]
                     , [0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0]
                     , [...this.reverseIndices]
                     , [0, 0, 1]
+                    //, [1, 0, 1, 1, 0, 0, 0, 1]
+                    , Math2dForUV.selectUV(["tr", "br", "tl", "bl"], this.uvMap.project(idBlock, "f"))
                 );
             }
 
-            insertTop(x, y, z) {
+            insertTop(x, y, z, idBlock) {
                 
                 this.insertSide(
                     [x, y + 1, z]
                     , [0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1]
                     , [...this.straightIndices]
                     , [0, 1, 0]
+                    , Math2dForUV.selectUV(["tl", "bl", "tr", "br"], this.uvMap.project(idBlock, "u"))
                 );
             }
 
-            insertBottom(x, y, z) {
+            insertBottom(x, y, z, idBlock) {
                 
                 this.insertSide(
                     [x, y, z]
                     , [0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1]
                     , [...this.reverseIndices]
                     , [0, -1, 0]
+                    , Math2dForUV.selectUV(["tr", "br", "tl", "bl"], this.uvMap.project(idBlock, "d"))
                 );
             }
         }
@@ -225,22 +299,17 @@
 
         /* Represents a single terrain chunk 16 * 16 * 16 size */
         class TerrainChunk {
-
-            /*
-                TODO:
-                1) Optimize for non-rendering the redundant blocks (like, all air or all ground)
-            */
             
             /* init chunks own coodrs */
             constructor(cx, cy, cz) {
                 this.cx = cx;
                 this.cy = cy;
                 this.cz = cz;
-                this.chunkData = new Array3D(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
+                this.chunkData = new Array3D(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);   // TODO: make loadable
 
                 this.reset();
             }
-
+            
             reset() {
                 this.localSgb = null;
             }
@@ -252,6 +321,7 @@
                 
                 if (this.localSgb !== null) {
                     sgb.insertSquareGridBuilder(this.localSgb);
+                    return;
                 }
 
                 this.localSgb = new SquareGridBuilder();
@@ -264,29 +334,30 @@
 
                 let chunkData = this.chunkData;                
                 chunkData.iterate(
-                    (i, j, k, value) => {
+                    (i, j, k, idBlock) => {
 
                         let airBlockCode = 0;
 
-                        if (value !== airBlockCode) {
+                        if (idBlock !== airBlockCode) {
                             
+                            /* TODO: replace === airBlockCode with a newly created isTransparent() function */
                             if (chunkData.getValueEx(i - 1, j, k, TerrainChunk.testForValueAt(leftNgh, CHUNK_SIZE - 1, j, k, airBlockCode)) === airBlockCode)
-                                localSgb.insertLeft(i + offsetX, j + offsetY, k + offsetZ);
+                                localSgb.insertLeft(i + offsetX, j + offsetY, k + offsetZ, idBlock);
                             
                             if (chunkData.getValueEx(i + 1, j, k, TerrainChunk.testForValueAt(rightNgh, 0, j, k, airBlockCode)) === airBlockCode)
-                                localSgb.insertRight(i + offsetX, j + offsetY, k + offsetZ);
+                                localSgb.insertRight(i + offsetX, j + offsetY, k + offsetZ, idBlock);
                             
                             if (chunkData.getValueEx(i, j + 1, k, TerrainChunk.testForValueAt(topNgh, i, 0, k, airBlockCode)) === airBlockCode)
-                                localSgb.insertTop(i + offsetX, j + offsetY, k + offsetZ);
+                                localSgb.insertTop(i + offsetX, j + offsetY, k + offsetZ, idBlock);
                             
                             if (chunkData.getValueEx(i, j - 1, k, TerrainChunk.testForValueAt(bottomNgh, i, CHUNK_SIZE - 1, k, airBlockCode)) === airBlockCode)
-                                localSgb.insertBottom(i + offsetX, j + offsetY, k + offsetZ);
+                                localSgb.insertBottom(i + offsetX, j + offsetY, k + offsetZ, idBlock);
                             
                             if (chunkData.getValueEx(i, j, k + 1, TerrainChunk.testForValueAt(frontNgh, i, j, 0, airBlockCode)) === airBlockCode)
-                                localSgb.insertFront(i + offsetX, j + offsetY, k + offsetZ);
+                                localSgb.insertFront(i + offsetX, j + offsetY, k + offsetZ, idBlock);
                             
                             if (chunkData.getValueEx(i, j, k - 1, TerrainChunk.testForValueAt(backNgh, i, j, CHUNK_SIZE - 1, airBlockCode)) === airBlockCode)
-                                localSgb.insertBack(i + offsetX, j + offsetY, k + offsetZ);
+                                localSgb.insertBack(i + offsetX, j + offsetY, k + offsetZ, idBlock);
                             
                         }
                     }
@@ -314,26 +385,36 @@
                 chunk.chunkData.iterate(
                     (x, y, z, value) => {
 
-                        if ((cx ^ cy ^ cz) % 8 !== 0) return 0;
+                        //f ((cx ^ cy ^ cz) % 8 !== 0) return 0;
+
+                        //return 1;
+
+                        let idBlock = 1;
+                        if (cy > 1)
+                            idBlock = 2;
+
+                        if (cy === 2 && y === CHUNK_SIZE - 1) {
+                            idBlock = 3;
+                        }
                         
-                        if (x === 0 && y === 0) return 1;
-                        if (y === 0 && z === 0) return 1;
-                        if (x === 0 && z === 0) return 1;
+                        if (x === 0 && y === 0) return idBlock;
+                        if (y === 0 && z === 0) return idBlock;
+                        if (x === 0 && z === 0) return idBlock;
                         
-                        if (x === 15 && y === 0) return 1;
-                        if (y === 15 && z === 0) return 1;
-                        if (x === 15 && z === 0) return 1;
+                        if (x === 15 && y === 0) return idBlock;
+                        if (y === 15 && z === 0) return idBlock;
+                        if (x === 15 && z === 0) return idBlock;
                         
-                        if (x === 15 && y === 15) return 1;
-                        if (y === 15 && z === 15) return 1;
-                        if (x === 15 && z === 15) return 1;
+                        if (x === 15 && y === 15) return idBlock;
+                        if (y === 15 && z === 15) return idBlock;
+                        if (x === 15 && z === 15) return idBlock;
                         
-                        if (x === 0 && y === 15) return 1;
-                        if (y === 0 && z === 15) return 1;
-                        if (x === 0 && z === 15) return 1;
+                        if (x === 0 && y === 15) return idBlock;
+                        if (y === 0 && z === 15) return idBlock;
+                        if (x === 0 && z === 15) return idBlock;
 
                         if (x >= 4 && x < 12 && y >= 4 && y < 12 && z >= 4 && z < 12)
-                            return BeyondMath.indicatorRandom(1);
+                            return BeyondMath.indicatorRandom(0.05) === 1 ? 2 : 0;
 
                         return 0;
                     }
@@ -347,57 +428,41 @@
         /* Class responsible for chuck loading and unloading, and their cumulative rendering with the neighbour consideration */
         class TerrainGrid {
             
-            constructor() {
+            constructor(renderer) {
                 this.chunkMap = new Object();
+                this.changed = false;
+                this.renderer = renderer;
             }
 
             dropChunk(x, y, z) {
+                //console.log("TERRAIN: drop " + [x, y, z]);
+
                 let cm = this.chunkMap;
+                let droppedChunk = cm[[x, y, z]];
+
                 delete cm[[x, y, z]];
+
+                if (droppedChunk !== null && droppedChunk !== undefined)
+                    this.updateChunkNeighboursAt(x, y, z);
+
+                this.renderer.deleteChunk(x, y, z);
             }
 
             getChunk(x, y, z) {
                 let cm = this.chunkMap;
                 return cm[[x, y, z]];
             }
-            
-            uploadChunk(chunk) {
-                let cm = this.chunkMap;
-                chunk.reset();
-                cm[[chunk.cx, chunk.cy, chunk.cz]] = chunk;
 
-                /* Now why do we reset the neighbour chunks? Because the connectivity data might have changed */
-                this.getChunk(chunk.cx - 1, chunk.cy, chunk.cz)?.reset();
-                this.getChunk(chunk.cx + 1, chunk.cy, chunk.cz)?.reset();
-                this.getChunk(chunk.cx, chunk.cy - 1, chunk.cz)?.reset();
-                this.getChunk(chunk.cx, chunk.cy + 1, chunk.cz)?.reset();
-                this.getChunk(chunk.cx, chunk.cy, chunk.cz - 1)?.reset();
-                this.getChunk(chunk.cx, chunk.cy, chunk.cz + 1)?.reset();
-            }
+            updateChunkAt(x, y, z) {
+                let cn = this.getChunk(x, y, z);
 
-            /* TODO: with the TerrainGridManipulator class, this method gets redundant */
-            generate(chunkProvider) {
+                if (cn !== null && cn !== undefined) {
+                    cn.reset();
     
-                for (let i = -4; i < 4; ++i) {
-                    for (let j = -4; j < 4; ++j) {
-                        for (let k = -4; k < 4; ++k) {
-                            let tc = chunkProvider.obtainChunkFrom(i, j, k);
-                            this.uploadChunk(tc);
-                        }
-                    }
-                }
-            }
-            
-            drawToSGB(sgb) {
-                
-                for (const [key, value] of Object.entries(this.chunkMap)) {
-                    
-                    let x = value.cx;
-                    let y = value.cy;
-                    let z = value.cz;
-                    
-                    value.drawToSGB(
-                        sgb
+                    let cn_sgb = new SquareGridBuilder();
+                        
+                    cn.drawToSGB(
+                        cn_sgb
                         , this.getChunk(x - 1, y, z)
                         , this.getChunk(x + 1, y, z)
                         , this.getChunk(x, y + 1, z)
@@ -405,24 +470,148 @@
                         , this.getChunk(x, y, z + 1)
                         , this.getChunk(x, y, z - 1)                        
                     );
+
+                    this.renderer.updateChunk(x, y, z, cn_sgb);
                 }
+            }
+
+            updateChunkNeighboursAt(x, y, z) {
+
+                this.updateChunkAt(x - 1, y, z);
+                this.updateChunkAt(x + 1, y, z);
+                this.updateChunkAt(x, y - 1, z);
+                this.updateChunkAt(x, y + 1, z);
+                this.updateChunkAt(x, y, z - 1);
+                this.updateChunkAt(x, y, z + 1);
+
+                this.changed = true;
+            }
+            
+            uploadChunk(chunk) {
+                //console.log("TERRAIN: upload " + [chunk.cx, chunk.cy, chunk.cz]);
+                
+                let cm = this.chunkMap;
+                chunk.reset();
+                cm[[chunk.cx, chunk.cy, chunk.cz]] = chunk;
+
+                this.updateChunkNeighboursAt(chunk.cx, chunk.cy, chunk.cz);
+                this.updateChunkAt(chunk.cx, chunk.cy, chunk.cz);
             }
 
         }
 
         /* TODO: I need a class that would manually construct TerrainGrid of chunks and update new chunks in it as the new data approaches */
         class TerrainGridManipulator {
+
+            constructor(terrain, chunkProvider) {
+                this.terrain = terrain;
+                this.chunkProvider = chunkProvider;
+            }
             
+            generate() {
+    
+                let terrain = this.terrain;
+                let chunkProvider = this.chunkProvider;
+    
+                
+                for (let i = -3; i < 3; ++i) {
+                    for (let j = -3; j < 3; ++j) {
+                        for (let k = -3; k < 3; ++k) {
+                            let tc = chunkProvider.obtainChunkFrom(i, j, k);
+                            terrain.uploadChunk(tc);
+                        }
+                    }
+                }
+                
+                
+            }
+
+            doBullshit() {
+                
+                return;
+                
+                if (Math.random() < 1) {
+                    let i = Math.floor(Math.random() * 16) - 8;
+                    let j = Math.floor(Math.random() * 8) - 4;
+                    let k = Math.floor(Math.random() * 16) - 8;
+
+                    if (Math.random() < 0.5) {                    
+                        let tc = this.chunkProvider.obtainChunkFrom(i, j, k);
+                        this.terrain.uploadChunk(tc);                    
+                    }
+                    else
+                        this.terrain.dropChunk(i, j, k);
+                }
+                
+                
+            }
+
+        };
+
+        /* ========================= ENGINE-DEPENDENT CLASSES =============================================================== */
+
+        /* TODO: make it disposable */
+        class TerrainRendererForBabylon {
+
+            constructor(scene, material) {
+                this.scene = scene;
+                this.material = material;
+                this.lookupMeshes = new Object();
+            }
+
+            deleteChunk(x, y, z) {
+                //console.log("RENDER: drop " + [x, y, z]);
+                
+                let mesh = this.lookupMeshes[[x, y, z]];
+
+                if (mesh !== null && mesh !== undefined) {
+                    mesh.dispose();
+                    delete this.lookupMeshes[[x, y, z]];
+                }
+            }
+
+            updateChunk(x, y, z, sgb) {
+                //onsole.log("RENDER: update " + [x, y, z]);
+
+                if (sgb.positions.length === 0) {
+                    this.deleteChunk(x, y, z);
+                    return;
+                }
+
+                let scene = this.scene;
+
+                var customMesh = this.lookupMeshes[[x, y, z]];
+
+                if (customMesh === null || customMesh === undefined) customMesh = new BABYLON.Mesh("custom", scene);
+                
+                var vertexData = new BABYLON.VertexData();
+                
+                vertexData.positions = sgb.positions;
+                vertexData.indices = sgb.indices;
+                vertexData.normals = sgb.normals;
+                vertexData.uvs = sgb.uvs;
+
+                vertexData.applyToMesh(customMesh);
+
+                customMesh.material = this.material;
+
+                this.lookupMeshes[[x, y, z]] = customMesh;
+
+            }
+
         };
 
 
-        /* ========================= ENGINE-DEPENDENT CODE =============================================================== */
 
-        
+        /* ========================= UNPROCESSED CODE ===================================================================== */
+
+
         const canvas = document.getElementById("renderCanvas"); // Get the canvas element
         const engine = new BABYLON.Engine(canvas, true); // Generate the BABYLON 3D engine
 
         let myCustomMesh;
+
+        let myMaterial;
 
         // Add your code here matching the playground format
         const createScene = function () {
@@ -449,32 +638,26 @@
             
             const boxMat2 = new BABYLON.StandardMaterial("boxMat");
             //boxMat2.diffuseTexture = new BABYLON.Texture("https://www.babylonjs-playground.com/textures/floor.png");
-            boxMat2.diffuseTexture = new BABYLON.Texture("https://i.postimg.cc/3w7Ld88p/trava.png");
+            
+            //boxMat2.diffuseTexture = new BABYLON.Texture("https://i.postimg.cc/3w7Ld88p/trava.png");
+            //boxMat2.diffuseTexture = new BABYLON.Texture("https://i.postimg.cc/2SvXw1Dq/trava-orient.png");
+
+            let myTextr = new BABYLON.Texture("https://i.postimg.cc/657Ljb8m/atlas.png", scene, false);
+            myTextr.updateSamplingMode(BABYLON.Texture.NEAREST_NEAREST);
+            
+            
+
+            boxMat2.diffuseTexture = myTextr;
 
             //--------------------------------------------------------------------------------------
+
+            myMaterial = boxMat2;
             
-            var customMesh = new BABYLON.Mesh("custom", scene);
+            //var customMesh = new BABYLON.Mesh("custom", scene);
 
-            myCustomMesh = customMesh;
-            
-            let test_sgb = new SquareGridBuilder();
+            //myCustomMesh = customMesh;
 
-            let terrain = new TerrainGrid();
-            let chunkProvider = new TerrainChunkProvider();
-
-            terrain.generate(chunkProvider);
-            terrain.drawToSGB(test_sgb);
-
-            var vertexData = new BABYLON.VertexData();
-            
-            vertexData.positions = test_sgb.positions;
-            vertexData.indices = test_sgb.indices;
-            vertexData.normals = test_sgb.normals;
-            vertexData.uvs = test_sgb.uvs;
-
-            vertexData.applyToMesh(customMesh);
-
-            customMesh.material = boxMat2;
+            //customMesh.material = boxMat2;
 
             //-------------------------------------------------------------------------------------
 
@@ -483,8 +666,44 @@
 
         const scene = createScene(); //Call the createScene function
 
+        
+        
+
+        let terrainRenderBabylon = new TerrainRendererForBabylon(scene, myMaterial);
+
+        let terrain = new TerrainGrid(terrainRenderBabylon);
+
+        let chunkProvider = new TerrainChunkProvider();
+
+        let terrainManip = new TerrainGridManipulator(terrain, chunkProvider);
+        terrainManip.generate();
+
+
+        
+
         // Register a render loop to repeatedly render the scene
         engine.runRenderLoop(function () {
+            
+            terrainManip.doBullshit();
+
+            //terrain.redraw();
+
+            /*
+            if (terrain.changed) {
+                let test_sgb = terrain.redraw();
+
+                var vertexData = new BABYLON.VertexData();
+                
+                vertexData.positions = test_sgb.positions;
+                vertexData.indices = test_sgb.indices;
+                vertexData.normals = test_sgb.normals;
+                vertexData.uvs = test_sgb.uvs;
+
+                vertexData.applyToMesh(myCustomMesh);
+
+                console.log("REBUILD");
+            }
+            */
 
             scene.render();
         });
