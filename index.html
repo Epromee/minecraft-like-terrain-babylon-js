@@ -313,10 +313,7 @@
             reset() {
                 this.localSgb = null;
             }
-
-            /*
-                TODO: proper UVs
-            */
+            
             drawToSGB(sgb, leftNgh, rightNgh, topNgh, bottomNgh, frontNgh, backNgh) {
                 
                 if (this.localSgb !== null) {
@@ -431,9 +428,6 @@
             }
         }
 
-        const CHUNKS_VISIBLE_RADIUS = 3;
-        const CHUNKS_VISIBLE_RADIUS_FAR = 6;
-
         /* Class responsible for chuck loading and unloading, and their cumulative rendering with the neighbour consideration */
         class TerrainGrid {
             
@@ -513,6 +507,12 @@
 
         }
 
+        //const CHUNKS_VISIBLE_RADIUS_NEAR = 2;
+        const CHUNKS_VISIBLE_RADIUS = 3;
+        const CHUNKS_VISIBLE_RADIUS_FAR = 4;
+
+        const DEFAULT_BATCH_LEVEL = 0;
+
         /* TODO: I need a class that would manually construct TerrainGrid of chunks and update new chunks in it as the new data approaches */
         class TerrainGridManipulator {
 
@@ -520,7 +520,12 @@
                 this.terrain = terrain;
                 this.chunkProvider = chunkProvider;
 
-                this.pengingAsyncTasks = new Object();
+                this.pendingAsyncTasks = new Object();
+                
+                this.asyncRunning = false;
+                this.dominatingChunkActionPriority = 1;
+
+                this.cx = this.cy = this.cz = undefined;
             }
             
             generate() {
@@ -528,54 +533,149 @@
                 let chunkProvider = this.chunkProvider;
             }
 
-            isPendingForDeletion(x, y, z) {
-                
+            cancelTaskAt(x, y, z) {
+                delete this.pendingAsyncTasks[[x, y, z]];
             }
 
-            isPendingForUploading(x, y, z) {
-                
+            orderTaskAt(x, y, z, task) {
+                this.pendingAsyncTasks[[x, y, z]] = [x, y, z, task];
+                this.kickstartAsyncChain();
+            }
+
+            getTaskAt(x, y, z) {
+                return this.pendingAsyncTasks[[x, y, z]]?.[3];
             }
 
             askAsyncUploadAt(x, y, z) {
 
-                let that = this;
-
-                if (!that.terrain.hasChunk(x, y, z)) {
-                    
-                    
-                    setTimeout(() => {
-                        if (!that.terrain.hasChunk(x, y, z)) {
-                            let tc = that.chunkProvider.obtainChunkFrom(x, y, z);
-                            that.terrain.uploadChunk(tc);
-                        }
-                    }, 0);
-                    
-                    this.pengingAsyncTasks[[x, y, z]] = [x, y, z, 1];
-
-                    this.kickstartAsyncChain();
+                if (!this.terrain.hasChunk(x, y, z)) {
+                    this.orderTaskAt(x, y, z, 1);
+                }
+                else {
+                    if (this.getTaskAt(x, y, z) === 0) {
+                        this.cancelTaskAt(x, y, z);
+                    }
                 }
             }
 
             askAsyncDeleteAt(x, y, z) {
 
-                let terr = this.terrain;
+                if (this.terrain.hasChunk(x, y, z)) {
+                    this.orderTaskAt(x, y, z, 0);
+                }
+                else {
+                    if (this.getTaskAt(x, y, z) === 1) {
+                        this.cancelTaskAt(x, y, z);
+                    }
+                }
+            }
 
+            fetchYetAnotherTask() {
+
+                this.dominatingChunkActionPriority = 1 - this.dominatingChunkActionPriority;
+
+                let dominatingAction = this.dominatingChunkActionPriority;
                 
-                setTimeout(() => {
-                    terr.dropChunk(x, y, z);
-                }, 0);
+                let minAddTask;
+                let minAddDistance;
 
-                this.pengingAsyncTasks[[x, y, z]] = [x, y, z, 0];
+                let maxRemoveTask;
+                let maxRemoveDistance;
 
-                this.kickstartAsyncChain();
+                for (const task of Object.entries(this.pendingAsyncTasks)) {
+                    
+                    let taskDef = task[1];
+                    
+                    let taskDistance = Math.abs(taskDef[0] - this.cx) + Math.abs(taskDef[1] - this.cy) + Math.abs(taskDef[2] - this.cz);
+
+                    if (taskDef[3] === 1 && (taskDistance < minAddDistance || minAddTask === undefined || minAddDistance === undefined)) {
+                        minAddTask = task;
+                        minAddDistance = taskDistance;
+                    }
+
+                    if (taskDef[3] === 0 && (taskDistance > maxRemoveDistance || maxRemoveTask === undefined || maxRemoveDistance === undefined)) {
+                        maxRemoveTask = task;
+                        maxRemoveDistance = taskDistance;
+                    }
+                }
+
+                if (dominatingAction === 0) {
+                    if (maxRemoveTask === undefined) return minAddTask;
+                    return maxRemoveTask;
+                }
+                else {
+                    if (minAddTask === undefined) return maxRemoveTask;
+                    return minAddTask;
+                }
             }
 
             processAsyncChain() {
+
+                if (this.asyncRunning === false)
+                    return;
+
+                let yetAnotherTaskData = this.fetchYetAnotherTask();
+
+                if (yetAnotherTaskData === undefined) {
+                    this.asyncRunning = false;
+                    console.log("[TerrainGridManipulator] terrain updated");
+                    return;
+                }
+
+                let yetAnotherTask = yetAnotherTaskData[1];
+
+                let cx = yetAnotherTask[0];
+                let cy = yetAnotherTask[1];
+                let cz = yetAnotherTask[2];
+                let taskType = yetAnotherTask[3];
+
+                let didNothing = true;
+
+                // add, but unless chunk is not too far
+                if (taskType === 1) {
+                    if (!this.terrain.hasChunk(cx, cy, cz)) {
+                        if (Math.max(Math.abs(this.cx - cx), Math.abs(this.cy - cy), Math.abs(this.cz - cz)) <= CHUNKS_VISIBLE_RADIUS_FAR) {
+                            let tc = this.chunkProvider.obtainChunkFrom(cx, cy, cz);
+                            this.terrain.uploadChunk(tc);
+                            didNothing = false;
+                        }
+                    }
+                }
                 
+                // delete unless chunk is not close enough
+                if (taskType === 0) {
+                    if (Math.max(Math.abs(this.cx - cx), Math.abs(this.cy - cy), Math.abs(this.cz - cz)) > CHUNKS_VISIBLE_RADIUS) {
+                        this.terrain.dropChunk(cx, cy, cz);
+                        didNothing = false;
+                    }
+                }
+
+                this.cancelTaskAt(cx, cy, cz);
+
+                /* Repeat something if this batch of asynchronous update did nothing */
+                if (didNothing) {
+                    this.processAsyncChain();
+                }
+                else {
+                    let that = this;
+
+                    setTimeout(() => {
+                        that.processAsyncChain();
+                    }, 0);
+                }         
             }
 
             kickstartAsyncChain() {
-                
+
+                let that = this;
+
+                if (!this.asyncRunning) {
+                    this.asyncRunning = true;
+                    console.log("[TerrainGridManipulator] terrain update started");
+                    setTimeout(() => {
+                        that.processAsyncChain();
+                    }, 0);
+                }
             }
 
             reloadRequiredTerrainParts(characterPosition) {
@@ -600,14 +700,18 @@
                     }
                 }
 
+                let selectedRadius = CHUNKS_VISIBLE_RADIUS;
+
                 /* Upload if too close */
-                for (let i = -CHUNKS_VISIBLE_RADIUS + cx; i < CHUNKS_VISIBLE_RADIUS + cx; ++i) {
-                    for (let j = -CHUNKS_VISIBLE_RADIUS + cy; j < CHUNKS_VISIBLE_RADIUS + cy; ++j) {
-                        for (let k = -CHUNKS_VISIBLE_RADIUS + cz; k < CHUNKS_VISIBLE_RADIUS + cz; ++k) {
+                for (let i = -selectedRadius + cx; i < selectedRadius + cx; ++i) {
+                    for (let j = -selectedRadius + cy; j < selectedRadius + cy; ++j) {
+                        for (let k = -selectedRadius + cz; k < selectedRadius + cz; ++k) {
                             this.askAsyncUploadAt(i, j, k);
                         }
                     }
                 }
+
+                this.processAsyncChain();   // at least one step each frame must be performed
                 
                 /*
                 if (Math.random() < 1) {
