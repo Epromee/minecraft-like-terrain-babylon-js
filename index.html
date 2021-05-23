@@ -389,6 +389,10 @@
 
                         //return 1;
 
+                        if (cy > 2) {
+                            return 0;
+                        }
+
                         let idBlock = 1;
                         if (cy > 1)
                             idBlock = 2;
@@ -396,6 +400,9 @@
                         if (cy === 2 && y === CHUNK_SIZE - 1) {
                             idBlock = 3;
                         }
+
+                        if (cy !== 2)
+                            return idBlock;
                         
                         if (x === 0 && y === 0) return idBlock;
                         if (y === 0 && z === 0) return idBlock;
@@ -424,6 +431,8 @@
             }
         }
 
+        const CHUNKS_VISIBLE_RADIUS = 3;
+        const CHUNKS_VISIBLE_RADIUS_FAR = 6;
 
         /* Class responsible for chuck loading and unloading, and their cumulative rendering with the neighbour consideration */
         class TerrainGrid {
@@ -435,7 +444,6 @@
             }
 
             dropChunk(x, y, z) {
-                //console.log("TERRAIN: drop " + [x, y, z]);
 
                 let cm = this.chunkMap;
                 let droppedChunk = cm[[x, y, z]];
@@ -451,6 +459,11 @@
             getChunk(x, y, z) {
                 let cm = this.chunkMap;
                 return cm[[x, y, z]];
+            }
+
+            hasChunk(x, y, z) {
+                let gc = this.getChunk(x, y, z);
+                return !(gc === undefined || gc === null); // TODO: check this - can I use just "!!gc" ?
             }
 
             updateChunkAt(x, y, z) {
@@ -506,30 +519,97 @@
             constructor(terrain, chunkProvider) {
                 this.terrain = terrain;
                 this.chunkProvider = chunkProvider;
+
+                this.pengingAsyncTasks = new Object();
             }
             
             generate() {
-    
                 let terrain = this.terrain;
                 let chunkProvider = this.chunkProvider;
-    
+            }
+
+            isPendingForDeletion(x, y, z) {
                 
-                for (let i = -3; i < 3; ++i) {
-                    for (let j = -3; j < 3; ++j) {
-                        for (let k = -3; k < 3; ++k) {
-                            let tc = chunkProvider.obtainChunkFrom(i, j, k);
-                            terrain.uploadChunk(tc);
+            }
+
+            isPendingForUploading(x, y, z) {
+                
+            }
+
+            askAsyncUploadAt(x, y, z) {
+
+                let that = this;
+
+                if (!that.terrain.hasChunk(x, y, z)) {
+                    
+                    
+                    setTimeout(() => {
+                        if (!that.terrain.hasChunk(x, y, z)) {
+                            let tc = that.chunkProvider.obtainChunkFrom(x, y, z);
+                            that.terrain.uploadChunk(tc);
+                        }
+                    }, 0);
+                    
+                    this.pengingAsyncTasks[[x, y, z]] = [x, y, z, 1];
+
+                    this.kickstartAsyncChain();
+                }
+            }
+
+            askAsyncDeleteAt(x, y, z) {
+
+                let terr = this.terrain;
+
+                
+                setTimeout(() => {
+                    terr.dropChunk(x, y, z);
+                }, 0);
+
+                this.pengingAsyncTasks[[x, y, z]] = [x, y, z, 0];
+
+                this.kickstartAsyncChain();
+            }
+
+            processAsyncChain() {
+                
+            }
+
+            kickstartAsyncChain() {
+                
+            }
+
+            reloadRequiredTerrainParts(characterPosition) {
+                
+                let cx = Math.floor(characterPosition[0] / CHUNK_SIZE);
+                let cy = Math.floor(characterPosition[1] / CHUNK_SIZE);
+                let cz = Math.floor(characterPosition[2] / CHUNK_SIZE);
+
+                if (this.cx === cx && this.cy === cy && this.cz === cz)
+                    return;
+
+                this.cx = cx;
+                this.cy = cy;
+                this.cz = cz;
+
+                /* Delete if too far away */
+                for (const [key, value] of Object.entries(this.terrain.chunkMap)) {
+                    let terr = this.terrain;
+                            
+                    if (Math.max(Math.abs(value.cx - cx), Math.abs(value.cy - cy), Math.abs(value.cz - cz)) > CHUNKS_VISIBLE_RADIUS_FAR) {
+                        this.askAsyncDeleteAt(value.cx, value.cy, value.cz);
+                    }
+                }
+
+                /* Upload if too close */
+                for (let i = -CHUNKS_VISIBLE_RADIUS + cx; i < CHUNKS_VISIBLE_RADIUS + cx; ++i) {
+                    for (let j = -CHUNKS_VISIBLE_RADIUS + cy; j < CHUNKS_VISIBLE_RADIUS + cy; ++j) {
+                        for (let k = -CHUNKS_VISIBLE_RADIUS + cz; k < CHUNKS_VISIBLE_RADIUS + cz; ++k) {
+                            this.askAsyncUploadAt(i, j, k);
                         }
                     }
                 }
                 
-                
-            }
-
-            doBullshit() {
-                
-                return;
-                
+                /*
                 if (Math.random() < 1) {
                     let i = Math.floor(Math.random() * 16) - 8;
                     let j = Math.floor(Math.random() * 8) - 4;
@@ -542,6 +622,7 @@
                     else
                         this.terrain.dropChunk(i, j, k);
                 }
+                */
                 
                 
             }
@@ -613,6 +694,8 @@
 
         let myMaterial;
 
+        let myCamera;
+
         // Add your code here matching the playground format
         const createScene = function () {
     
@@ -623,8 +706,10 @@
             const camera = new BABYLON.UniversalCamera("UniversalCamera", new BABYLON.Vector3(0, -5, -10), scene);
 
             camera.attachControl(canvas, true);
+            camera.position.y = 50;
+            //camera.setTarget(new BABYLON.Vector3(0, 0, 0));
 
-            camera.setTarget(new BABYLON.Vector3(0, 0, 0));
+            myCamera = camera;
             
             const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(1, 1, 0));
 
@@ -642,10 +727,15 @@
             //boxMat2.diffuseTexture = new BABYLON.Texture("https://i.postimg.cc/3w7Ld88p/trava.png");
             //boxMat2.diffuseTexture = new BABYLON.Texture("https://i.postimg.cc/2SvXw1Dq/trava-orient.png");
 
-            let myTextr = new BABYLON.Texture("https://i.postimg.cc/657Ljb8m/atlas.png", scene, false);
-            myTextr.updateSamplingMode(BABYLON.Texture.NEAREST_NEAREST);
+            let myTextr = new BABYLON.Texture("https://i.postimg.cc/657Ljb8m/atlas.png", scene, false, undefined);
             
             
+            //myTextr.updateSamplingMode(BABYLON.Texture.NEAREST_SAMPLINGMODE);
+            myTextr.wrapR = BABYLON.CLAMP_ADDRESSMODE;
+
+            
+            myTextr.anisotropicFilteringLevel = 1;
+            myTextr.homogeneousRotationInUVTransform = true;
 
             boxMat2.diffuseTexture = myTextr;
 
@@ -684,26 +774,7 @@
         // Register a render loop to repeatedly render the scene
         engine.runRenderLoop(function () {
             
-            terrainManip.doBullshit();
-
-            //terrain.redraw();
-
-            /*
-            if (terrain.changed) {
-                let test_sgb = terrain.redraw();
-
-                var vertexData = new BABYLON.VertexData();
-                
-                vertexData.positions = test_sgb.positions;
-                vertexData.indices = test_sgb.indices;
-                vertexData.normals = test_sgb.normals;
-                vertexData.uvs = test_sgb.uvs;
-
-                vertexData.applyToMesh(myCustomMesh);
-
-                console.log("REBUILD");
-            }
-            */
+            terrainManip.reloadRequiredTerrainParts([myCamera.position.x, myCamera.position.y, myCamera.position.z]);
 
             scene.render();
         });
