@@ -299,6 +299,8 @@
 
         /* Represents a single terrain chunk 16 * 16 * 16 size */
         class TerrainChunk {
+
+            /* TODO: make sparse chunks - like - all air */
             
             /* init chunks own coodrs */
             constructor(cx, cy, cz) {
@@ -306,6 +308,8 @@
                 this.cy = cy;
                 this.cz = cz;
                 this.chunkData = new Array3D(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);   // TODO: make loadable
+                this.visible = true;
+                this.visibleDirty = false;  // if any attempt to update it while invicible encountered
 
                 this.reset();
             }
@@ -387,6 +391,7 @@
                         //return 1;
 
                         if (cy > 2) {
+                            if (x === y && y === z && z === 8) return 3;
                             return 0;
                         }
 
@@ -449,6 +454,35 @@
 
                 this.renderer.deleteChunk(x, y, z);
             }
+            
+            uploadChunk(chunk) {
+                //console.log("TERRAIN: upload " + [chunk.cx, chunk.cy, chunk.cz]);
+                
+                let cm = this.chunkMap;
+                chunk.reset();
+                cm[[chunk.cx, chunk.cy, chunk.cz]] = chunk;
+
+                this.updateChunkNeighboursAt(chunk.cx, chunk.cy, chunk.cz);
+                this.updateChunkAt(chunk.cx, chunk.cy, chunk.cz);
+            }
+
+            updateVisibility(x, y, z, visible) {
+                let ch = this.getChunk(x, y, z);
+                
+                /* invisible chunks might have become dirty for long no-updates, let's refresh them */
+                if (ch) {
+
+                    if (!ch.visible && visible && ch.visibleDirty) {
+                        ch.visible = visible;
+                        this.updateChunkAt(x, y, z);
+                    }
+                    else {
+                        ch.visible = visible;
+                    }
+                    
+                    this.renderer.updateVisibility(x, y, z, visible);
+                }
+            }
 
             getChunk(x, y, z) {
                 let cm = this.chunkMap;
@@ -460,10 +494,26 @@
                 return !(gc === undefined || gc === null); // TODO: check this - can I use just "!!gc" ?
             }
 
+            // TODO: 
+            beginUpdateSeries() {
+                
+            }
+
+            commitUpdateSeries() {
+                
+            }
+
             updateChunkAt(x, y, z) {
                 let cn = this.getChunk(x, y, z);
 
                 if (cn !== null && cn !== undefined) {
+
+                    /* If this chunk is invicible, why should we ever update it's structure? It's computationally expensive */
+                    if (cn.visible === false) {
+                        cn.visibleDirty = true;
+                        return;
+                    }
+
                     cn.reset();
     
                     let cn_sgb = new SquareGridBuilder();
@@ -493,23 +543,13 @@
 
                 this.changed = true;
             }
-            
-            uploadChunk(chunk) {
-                //console.log("TERRAIN: upload " + [chunk.cx, chunk.cy, chunk.cz]);
-                
-                let cm = this.chunkMap;
-                chunk.reset();
-                cm[[chunk.cx, chunk.cy, chunk.cz]] = chunk;
-
-                this.updateChunkNeighboursAt(chunk.cx, chunk.cy, chunk.cz);
-                this.updateChunkAt(chunk.cx, chunk.cy, chunk.cz);
-            }
 
         }
 
         //const CHUNKS_VISIBLE_RADIUS_NEAR = 2;
-        const CHUNKS_VISIBLE_RADIUS = 3;
-        const CHUNKS_VISIBLE_RADIUS_FAR = 4;
+        const CHUNKS_VISIBLE_RADIUS = 8;
+        const CHUNKS_VISIBLE_RADIUS_FAR = 12;
+        const CHUNKS_VISIBLE_RADIUS_PSEUDO_FAR = 10;
 
         const DEFAULT_BATCH_LEVEL = 0;
 
@@ -570,7 +610,13 @@
                 }
             }
 
+            refreshTaskPriority() {
+                // TODO:
+            }
+
             fetchYetAnotherTask() {
+
+                // TODO: sort by priority, and only take one task
 
                 this.dominatingChunkActionPriority = 1 - this.dominatingChunkActionPriority;
 
@@ -586,7 +632,7 @@
                     
                     let taskDef = task[1];
                     
-                    let taskDistance = Math.abs(taskDef[0] - this.cx) + Math.abs(taskDef[1] - this.cy) + Math.abs(taskDef[2] - this.cz);
+                    let taskDistance = 2 * Math.abs(taskDef[0] - this.cx) + Math.abs(taskDef[1] - this.cy) + 2 * Math.abs(taskDef[2] - this.cz);
 
                     if (taskDef[3] === 1 && (taskDistance < minAddDistance || minAddTask === undefined || minAddDistance === undefined)) {
                         minAddTask = task;
@@ -631,13 +677,15 @@
 
                 let didNothing = true;
 
+                let isTaskClose = Math.abs(cx - this.cx) + Math.abs(cy - this.cy) + Math.abs(cz - this.cz) <= 3;
+
                 // add, but unless chunk is not too far
                 if (taskType === 1) {
                     if (!this.terrain.hasChunk(cx, cy, cz)) {
                         if (Math.max(Math.abs(this.cx - cx), Math.abs(this.cy - cy), Math.abs(this.cz - cz)) <= CHUNKS_VISIBLE_RADIUS_FAR) {
                             let tc = this.chunkProvider.obtainChunkFrom(cx, cy, cz);
                             this.terrain.uploadChunk(tc);
-                            didNothing = false;
+                            didNothing = isTaskClose;
                         }
                     }
                 }
@@ -684,20 +732,28 @@
                 let cy = Math.floor(characterPosition[1] / CHUNK_SIZE);
                 let cz = Math.floor(characterPosition[2] / CHUNK_SIZE);
 
-                if (this.cx === cx && this.cy === cy && this.cz === cz)
+                //this.processAsyncChain();
+
+                if (this.cx === cx && this.cy === cy && this.cz === cz) {
                     return;
+                }
 
                 this.cx = cx;
                 this.cy = cy;
                 this.cz = cz;
 
-                /* Delete if too far away */
+                /* Update visibility, mark for deletion if too far away */
                 for (const [key, value] of Object.entries(this.terrain.chunkMap)) {
                     let terr = this.terrain;
+
+                    let dist = Math.max(Math.abs(value.cx - cx), Math.abs(value.cy - cy), Math.abs(value.cz - cz));
                             
-                    if (Math.max(Math.abs(value.cx - cx), Math.abs(value.cy - cy), Math.abs(value.cz - cz)) > CHUNKS_VISIBLE_RADIUS_FAR) {
+                    if (dist > CHUNKS_VISIBLE_RADIUS_FAR) {
                         this.askAsyncDeleteAt(value.cx, value.cy, value.cz);
                     }
+    
+                    //terr.updateVisibility(value.cx, value.cy, value.cz, dist <= CHUNKS_VISIBLE_RADIUS_PSEUDO_FAR);
+                    
                 }
 
                 let selectedRadius = CHUNKS_VISIBLE_RADIUS;
@@ -711,23 +767,8 @@
                     }
                 }
 
-                this.processAsyncChain();   // at least one step each frame must be performed
-                
-                /*
-                if (Math.random() < 1) {
-                    let i = Math.floor(Math.random() * 16) - 8;
-                    let j = Math.floor(Math.random() * 8) - 4;
-                    let k = Math.floor(Math.random() * 16) - 8;
-
-                    if (Math.random() < 0.5) {                    
-                        let tc = this.chunkProvider.obtainChunkFrom(i, j, k);
-                        this.terrain.uploadChunk(tc);                    
-                    }
-                    else
-                        this.terrain.dropChunk(i, j, k);
-                }
-                */
-                
+                this.refreshTaskPriority();
+                this.processAsyncChain();   // at this point, also update task priority          
                 
             }
 
@@ -765,11 +806,11 @@
 
                 let scene = this.scene;
 
-                var customMesh = this.lookupMeshes[[x, y, z]];
+                let customMesh = this.lookupMeshes[[x, y, z]];
 
                 if (customMesh === null || customMesh === undefined) customMesh = new BABYLON.Mesh("custom", scene);
                 
-                var vertexData = new BABYLON.VertexData();
+                let vertexData = new BABYLON.VertexData();
                 
                 vertexData.positions = sgb.positions;
                 vertexData.indices = sgb.indices;
@@ -782,6 +823,14 @@
 
                 this.lookupMeshes[[x, y, z]] = customMesh;
 
+            }
+
+            updateVisibility(x, y, z, visible) {
+                let mesh = this.lookupMeshes[[x, y, z]];
+
+                if (mesh) {
+                    mesh.isVisible = visible;
+                }
             }
 
         };
