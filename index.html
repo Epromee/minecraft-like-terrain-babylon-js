@@ -32,6 +32,177 @@
 
     <script>
 
+        /*================================================= CODE STOLEN FROM MY OTHER PROJECT ======================*/
+
+        /* Deterministic 2d random */
+        function det_random_2d(seed, layers, layer, x, y) {
+
+            // merge coords with layers
+            if (x % 2 == y % 2) {
+                x = x * layers;
+                y = y * layers;
+                x = x + layer;
+            }
+            else {
+                x = x * layers;
+                y = y * layers;
+                y = y + layer;
+            }
+            
+            //-------------------------------------------------------------------------
+            
+            // compute
+            let val = 0;
+
+            // temporary vars for linear transformations
+            let nx, ny;
+
+            x += seed;
+            
+            // xor shuffle
+            y ^= x;
+            nx = x - y;
+            ny = x + y - seed;
+            x = nx;
+            y = ny;
+            x ^= y;
+
+            // radius shuffle
+            y ^= ((x * x) & -Math.abs(x)) * Math.sign(x);
+            x ^= ((y * y) & -Math.abs(y)) * Math.sign(y);
+            y ^= ((x * x) & -Math.abs(x)) * Math.sign(x);
+            x ^= ((y * y) & -Math.abs(y)) * Math.sign(y);
+            
+            val = x ^ y ^ seed;
+           
+            //-----------------------------------------------------------
+            
+            // and return
+            if (Math.floor(val / 997) % 2 == 0)
+                val = ((997 + (val % 997)) % 997) / 997;
+            else
+                val = ((997 + (-val % 997)) % 997) / 997;
+               
+            return val;
+        }
+
+        //==========================================================================================
+
+        const HALF_PI = Math.PI / 2;
+        const TWO_PI = Math.PI * 2;
+
+        function smoothf_norm(val) {
+            return Math.sin(val * HALF_PI);
+        }
+
+        // smooth
+        function smoothf(val) {
+
+            let fixval = val * 2 - 1;
+
+            let smoothval = fixval;
+
+            smoothval = smoothf_norm(smoothval);
+
+            let backval = (smoothval + 1) / 2;
+        
+            return backval;
+        };
+
+        let pnoise_cache = [];
+        let pnoise_cache_entries = 1000;
+
+        for (let k = 0; k < pnoise_cache_entries; ++k) {
+            pnoise_cache.push({ ci : 0, cj : 0, cmseed : 0, crsize : 0, value : 0});
+        }
+
+        function pnoise(i, j, mseed, rsize) {
+
+            // check cache
+            let hash = Math.abs(((rsize << 8) ^ (mseed << 4) ^ (i << 2) ^ (j) ^ (-1))) % pnoise_cache_entries;
+
+            let def = pnoise_cache[hash];
+
+            if (def.crsize === rsize && def.cmseed === mseed && def.ci === i && def.cj === j) {
+                return def.value;
+            }
+            
+            rsize = Math.floor(rsize);
+            
+            if (rsize === 0)
+                return 0.5;
+            
+            i = Math.floor(i);
+            j = Math.floor(j);
+
+            let idrsize = Math.floor(i / rsize);
+            let jdrsize = Math.floor(j / rsize);
+
+            let tl_x, tl_y, bl_x, bl_y, tr_x, tr_y, br_x, br_y;
+
+            let tl_r = det_random_2d(mseed, 1, 0, idrsize, jdrsize);
+            let tr_r = det_random_2d(mseed, 1, 0, idrsize + 1, jdrsize);
+            let bl_r = det_random_2d(mseed, 1, 0, idrsize, jdrsize + 1);
+            let br_r = det_random_2d(mseed, 1, 0, idrsize + 1, jdrsize + 1);
+                    
+            tl_x = Math.sin(TWO_PI * tl_r);
+            tr_x = Math.sin(TWO_PI * tr_r);
+            bl_x = Math.sin(TWO_PI * bl_r);
+            br_x = Math.sin(TWO_PI * br_r);
+
+            tl_y = Math.cos(TWO_PI * tl_r);
+            tr_y = Math.cos(TWO_PI * tr_r);
+            bl_y = Math.cos(TWO_PI * bl_r);
+            br_y = Math.cos(TWO_PI * br_r);
+            
+
+            //---------------------------------------------------------------
+            let ceili = Math.ceil(i / rsize);
+            if (ceili == idrsize)
+                ceili++;
+
+            let ceilj = Math.ceil(j / rsize);
+            if (ceilj == jdrsize)
+                ceilj++;
+
+            let idr_r_size = idrsize * rsize;
+            let jdr_r_size = jdrsize * rsize;
+
+            let dx = (i - idr_r_size) / (ceili * rsize - idr_r_size);
+            let dy = (j - jdr_r_size) / (ceilj * rsize - jdr_r_size);
+
+            let dxm = dx - 1;
+            let dym = dy - 1;
+
+            let tl = (dx * tl_x) + (dy * tl_y);
+            let tr = (dxm * tr_x) + (dy * tr_y);
+            let bl = (dx * bl_x) + (dym * bl_y);
+            let br = (dxm * br_x) + (dym * br_y);
+
+            dx = smoothf(dx);
+            dy = smoothf(dy);
+
+            tl = smoothf_norm(tl);
+            tr = smoothf_norm(tr);
+            bl = smoothf_norm(bl);
+            br = smoothf_norm(br);
+
+            dxm = 1 - dx;
+            dym = 1 - dy;
+
+            let power = (tl * dxm + tr * dx) * dym + (bl * dxm + br * dx) * dy;
+
+            let val = (power + 1) / 2;
+
+            def.ci = i;
+            def.cj = j;
+            def.cmseed = mseed;
+            def.crsize = rsize;
+            def.value = val;
+            
+            return val;
+        }
+
         /*================================================= UTIL CODE ==============================================*/
 
         /* Appends source contents to the end of target contents (in place!) */
@@ -314,6 +485,7 @@
                 this.reset();
             }
             
+            /* TODO: make chunk of central and peripheral sides, to optimize recalculations */
             reset() {
                 this.localSgb = null;
             }
@@ -387,11 +559,26 @@
                     (x, y, z, value) => {
 
                         //f ((cx ^ cy ^ cz) % 8 !== 0) return 0;
+                        let gx = CHUNK_SIZE * cx + x;
+                        let gy = CHUNK_SIZE * cy + y;
+                        let gz = CHUNK_SIZE * cz + z;
 
                         //return 1;
+                        let height = pnoise(gx, gz, 1337666, 20);
+
+
+                        let maxHeight = Math.floor(50 * height) - 25;
+
+                        if (gy > maxHeight) return 0;
+                        if (gy === maxHeight) return 3;
+                        if (gy > maxHeight - 3) return 2;
+                        
+                        return 1;
+
+                        /*
 
                         if (cy > 2) {
-                            if (x === y && y === z && z === 8) return 3;
+                            //if (x === y && y === z && z === 8) return 3;
                             return 0;
                         }
 
@@ -426,6 +613,8 @@
                             return BeyondMath.indicatorRandom(0.05) === 1 ? 2 : 0;
 
                         return 0;
+
+                        */
                     }
                 );
                 
@@ -548,8 +737,10 @@
 
         //const CHUNKS_VISIBLE_RADIUS_NEAR = 2;
         const CHUNKS_VISIBLE_RADIUS = 8;
+        const CHUNKS_VISIBLE_HEIGHT_RADIUS = 4;
+
         const CHUNKS_VISIBLE_RADIUS_FAR = 12;
-        const CHUNKS_VISIBLE_RADIUS_PSEUDO_FAR = 10;
+        const CHUNKS_VISIBLE_RADIUS_PSEUDO_FAR = 14;
 
         const DEFAULT_BATCH_LEVEL = 0;
 
@@ -611,47 +802,69 @@
             }
 
             refreshTaskPriority() {
-                // TODO:
+
+                this.addTasks = [];
+                this.removeTasks = [];
+
+                for (const task of Object.entries(this.pendingAsyncTasks)) {
+
+                    let taskType = task[1][3];
+
+                    if (taskType === 0)
+                        this.removeTasks.push(task);
+
+                    if (taskType === 1)
+                        this.addTasks.push(task);
+                }
+
+                let that = this;
+
+                this.addTasks = this.addTasks.sort(function (left, right) {
+                    let leftDef = left[1];
+                    let rightDef = right[1];
+
+                    let leftDistance = 2 * Math.abs(leftDef[0] - that.cx) + Math.abs(leftDef[1] - that.cy) + 2 * Math.abs(leftDef[2] - that.cz);
+                    let rightDistance = 2 * Math.abs(rightDef[0] - that.cx) + Math.abs(rightDef[1] - that.cy) + 2 * Math.abs(rightDef[2] - that.cz);
+
+                    if (Math.abs(leftDef[1] - that.cy) <= 1 && Math.abs(rightDef[1] - that.cy) > 1) {
+                        rightDistance += 2;
+                    }
+
+                    let cpr = rightDistance - leftDistance;
+                    
+                    if (leftDistance === rightDistance) {
+                        cpr = rightDef[1] - leftDef[1];
+                    }
+
+                    return cpr;
+                });
+
+                this.removeTasks = this.removeTasks.sort(function (left, right) {
+                    let leftDef = left[1];
+                    let rightDef = right[1];
+
+                    let leftDistance = 2 * Math.abs(leftDef[0] - that.cx) + Math.abs(leftDef[1] - that.cy) + 2 * Math.abs(leftDef[2] - that.cz);
+                    let rightDistance = 2 * Math.abs(rightDef[0] - that.cx) + Math.abs(rightDef[1] - that.cy) + 2 * Math.abs(rightDef[2] - that.cz);
+
+                    return leftDistance - rightDistance;
+                });
             }
 
             fetchYetAnotherTask() {
 
-                // TODO: sort by priority, and only take one task
-
                 this.dominatingChunkActionPriority = 1 - this.dominatingChunkActionPriority;
 
-                let dominatingAction = this.dominatingChunkActionPriority;
-                
-                let minAddTask;
-                let minAddDistance;
-
-                let maxRemoveTask;
-                let maxRemoveDistance;
-
-                for (const task of Object.entries(this.pendingAsyncTasks)) {
-                    
-                    let taskDef = task[1];
-                    
-                    let taskDistance = 2 * Math.abs(taskDef[0] - this.cx) + Math.abs(taskDef[1] - this.cy) + 2 * Math.abs(taskDef[2] - this.cz);
-
-                    if (taskDef[3] === 1 && (taskDistance < minAddDistance || minAddTask === undefined || minAddDistance === undefined)) {
-                        minAddTask = task;
-                        minAddDistance = taskDistance;
-                    }
-
-                    if (taskDef[3] === 0 && (taskDistance > maxRemoveDistance || maxRemoveTask === undefined || maxRemoveDistance === undefined)) {
-                        maxRemoveTask = task;
-                        maxRemoveDistance = taskDistance;
-                    }
-                }
-
-                if (dominatingAction === 0) {
-                    if (maxRemoveTask === undefined) return minAddTask;
-                    return maxRemoveTask;
+                if (this.dominatingChunkActionPriority === 1) {
+                    let task = this.addTasks.pop();
+                    if (!task)
+                        task = this.removeTasks.pop();
+                    return task;
                 }
                 else {
-                    if (minAddTask === undefined) return maxRemoveTask;
-                    return minAddTask;
+                    let task = this.removeTasks.pop();
+                    if (!task)
+                        task = this.addTasks.pop();
+                    return task;
                 }
             }
 
@@ -734,6 +947,7 @@
 
                 //this.processAsyncChain();
 
+                /* TODO: trigger update only if gone way too far - like, 2 chunks */
                 if (this.cx === cx && this.cy === cy && this.cz === cz) {
                     return;
                 }
@@ -752,23 +966,26 @@
                         this.askAsyncDeleteAt(value.cx, value.cy, value.cz);
                     }
     
-                    //terr.updateVisibility(value.cx, value.cy, value.cz, dist <= CHUNKS_VISIBLE_RADIUS_PSEUDO_FAR);
+                    terr.updateVisibility(value.cx, value.cy, value.cz, dist <= CHUNKS_VISIBLE_RADIUS_PSEUDO_FAR);
                     
                 }
 
                 let selectedRadius = CHUNKS_VISIBLE_RADIUS;
+                let selectedHeightRadius = CHUNKS_VISIBLE_HEIGHT_RADIUS;
 
                 /* Upload if too close */
                 for (let i = -selectedRadius + cx; i < selectedRadius + cx; ++i) {
-                    for (let j = -selectedRadius + cy; j < selectedRadius + cy; ++j) {
+                    for (let j = -selectedHeightRadius + cy; j < selectedHeightRadius + cy; ++j) {
                         for (let k = -selectedRadius + cz; k < selectedRadius + cz; ++k) {
                             this.askAsyncUploadAt(i, j, k);
                         }
                     }
                 }
-
+                
                 this.refreshTaskPriority();
-                this.processAsyncChain();   // at this point, also update task priority          
+
+                for (let i = 0; i < 9; ++i)
+                    this.processAsyncChain();   // at this point, also update task priority          
                 
             }
 
